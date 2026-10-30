@@ -100,6 +100,39 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var sprMushP = arrayOfNulls<Sprite>(5)
     private var sprScorp = arrayOfNulls<Sprite>(2)
 
+    // arcade 7-level color cycle: fill top, fill bottom, accent; level 8 wraps to level 1
+    private val PALS = arrayOf(
+        intArrayOf(Color.rgb(120, 240, 70), Color.rgb(55, 175, 40), Color.rgb(240, 75, 45)),
+        intArrayOf(Color.rgb(80, 150, 255), Color.rgb(45, 70, 205), Color.rgb(185, 85, 255)),
+        intArrayOf(Color.rgb(255, 80, 70), Color.rgb(195, 30, 45), Color.rgb(255, 225, 60)),
+        intArrayOf(Color.rgb(60, 215, 225), Color.rgb(20, 145, 175), Color.rgb(245, 245, 255)),
+        intArrayOf(Color.rgb(205, 95, 255), Color.rgb(135, 40, 195), Color.rgb(115, 240, 95)),
+        intArrayOf(Color.rgb(255, 230, 70), Color.rgb(220, 165, 25), Color.rgb(75, 135, 255)),
+        intArrayOf(Color.rgb(255, 155, 50), Color.rgb(205, 95, 20), Color.rgb(70, 205, 225))
+    )
+    private var pal = 1
+
+    private fun loadPalette(p: Int) {
+        pal = p
+        val c = PALS[(p - 1) % 7]
+        val glowFill = lighten(c[0], 1.25f)
+        val glowAccent = lighten(c[2], 1.25f)
+        fun spr(name: String, glow: Int): Sprite =
+            Sprite(BitmapFactory.decodeResource(resources, resources.getIdentifier("spr_l${p}_$name", "drawable", context.packageName)), glow)
+        for (i in 1..4) sprMush[i] = spr("mushroom_$i", glowAccent)
+        for (i in 1..4) sprMushP[i] = spr("mushp_$i", glowAccent)
+        sprBody = spr("c_body", glowFill)
+        sprHead = spr("c_head", glowAccent)
+        sprSpider[0] = spr("spider_0", glowAccent); sprSpider[1] = spr("spider_1", glowAccent)
+        sprFlea[0] = spr("flea_0", glowFill); sprFlea[1] = spr("flea_1", glowFill)
+        sprScorp[0] = spr("scorp_0", glowFill); sprScorp[1] = spr("scorp_1", glowFill)
+    }
+
+    private fun lighten(c: Int, f: Float): Int = Color.rgb(
+        kotlin.math.min(255, (Color.red(c) * f).toInt()),
+        kotlin.math.min(255, (Color.green(c) * f).toInt()),
+        kotlin.math.min(255, (Color.blue(c) * f).toInt()))
+
     // ---- sound ----
     private val snd: SoundPool = SoundPool.Builder()
         .setMaxStreams(6)
@@ -173,8 +206,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         sprSpider[0] = spr("spider_0", Color.rgb(255, 80, 140)); sprSpider[1] = spr("spider_1", Color.rgb(255, 80, 140))
         sprFlea[0] = spr("flea_0", Color.rgb(200, 120, 255)); sprFlea[1] = spr("flea_1", Color.rgb(200, 120, 255))
         sprShip = spr("ship", Color.rgb(90, 210, 255))
-        for (i in 1..4) sprMushP[i] = spr("mushp_$i", Color.rgb(210, 120, 255))
-        sprScorp[0] = spr("scorp_0", Color.rgb(255, 220, 60)); sprScorp[1] = spr("scorp_1", Color.rgb(255, 220, 60))
+        loadPalette(1)
         for (n in listOf("shoot", "mush", "mushbrk", "kill", "head", "spider", "flea", "die", "wave", "poison", "scorp")) {
             sIds[n] = snd.load(context, resources.getIdentifier(n, "raw", context.packageName), 1)
         }
@@ -200,6 +232,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         score = 0
         lives = 3
         wave = 1
+        loadPalette(1)
         mush.clear()
         chains.clear()
         bullets.clear()
@@ -437,6 +470,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 chains.removeAll { it.isEmpty() }
                 if (chains.isEmpty()) {
                     wave++
+                    loadPalette(((wave - 1) % 7) + 1)
                     spawnWave(wave)
                     play("wave", 0.6f)
                     floats.add(FT(fieldLeft + cell * COLS / 2, fieldTop + cell * 8, "WAVE $wave", 1.2f))
@@ -776,7 +810,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         pText.color = Color.WHITE
         canvas.drawText("SCORE %05d".format(score), 16f, 46f, pText)
         canvas.drawText("HI %05d".format(highScore), screenW / 2f - 110f, 46f, pText)
-        pText.color = Color.rgb(255, 200, 60)
+        pText.color = PALS[(pal - 1) % 7][2]
         canvas.drawText("WAVE $wave", screenW - 210f, 46f, pText)
         for (i in 0 until lives) {
             val x = 30f + i * 44f
