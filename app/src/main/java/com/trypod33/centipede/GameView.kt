@@ -487,36 +487,49 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (stepT < interval) return
         stepT -= interval
         for (chain in chains) {
-            for (s in chain) {
-                if (s.poisoned) {
-                    // poisoned: dives straight down, chewing through anything
-                    val nr = s.row + 1
-                    mush.remove(key(s.col, nr))
-                    s.row = nr
-                    if (nr >= ROWS - 2) s.poisoned = false
-                    continue
-                }
-                var nc = s.col + s.dir
-                var nr = s.row
+            if (chain.isEmpty()) continue
+            val head = chain[0]
+            var nc = head.col
+            var nr = head.row
+            if (head.poisoned) {
+                // poisoned head: dives straight down, chewing through anything
+                nr = head.row + 1
+                mush.remove(key(head.col, nr))
+                if (nr >= ROWS - 1) head.poisoned = false
+            } else {
+                nc += head.dir
                 val target = mush[key(nc, nr)]
                 if (nc < 0 || nc >= COLS || target != null) {
                     if (target != null && target.poisoned) {
                         // eats the poisoned mushroom and goes crazy
                         mush.remove(key(nc, nr))
-                        s.poisoned = true
+                        head.poisoned = true
                         play("poison", 0.5f)
                     } else {
-                        s.dir = -s.dir
-                        nc = s.col
+                        head.dir = -head.dir
+                        nc = head.col
                         nr += 1
                     }
                 }
-                if (nr >= ROWS - 1) {
+                if (nr > ROWS - 1) {
                     nr = 0
-                    s.isHead = true
+                    head.isHead = true
                 }
-                s.col = nc
-                s.row = nr
+            }
+            var pc = head.col
+            var pr = head.row
+            head.col = nc
+            head.row = nr
+            // the body follows the head's exact trail, arcade style
+            for (i in 1 until chain.size) {
+                val s = chain[i]
+                val tc = pc
+                val tr = pr
+                pc = s.col
+                pr = s.row
+                s.col = tc
+                s.row = tr
+                s.dir = chain[i - 1].dir
             }
         }
     }
@@ -687,13 +700,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         // centipede (undulating)
         for (chain in chains) {
-            for ((i, s) in chain.withIndex()) {
+            for (i in chain.size - 1 downTo 0) {
+                val s = chain[i]
                 val x = cellX(s.col)
-                val y = cellY(s.row) + sin(time * 9f + i * 1.15f) * cell * 0.11f
+                val y = cellY(s.row) + sin(time * 9f + i * 1.15f) * cell * 0.05f
                 if (s.isHead) {
-                    sprHead?.draw(canvas, x, y, cell * 1.22f, pSprite, if (s.dir == 1) 90f else -90f)
+                    sprHead?.draw(canvas, x, y, cell * 1.28f, pSprite, flipH = s.dir < 0)
                 } else {
-                    sprBody?.draw(canvas, x, y, cell * 1.15f, pSprite)
+                    sprBody?.draw(canvas, x, y, cell * 1.28f, pSprite)
                 }
             }
         }

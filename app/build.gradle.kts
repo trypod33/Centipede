@@ -20,8 +20,8 @@ android {
         applicationId = "com.trypod33.centipede"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
     }
 
     signingConfigs {
