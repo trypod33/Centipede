@@ -1,16 +1,22 @@
 package com.trypod33.centipede
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sign
+import kotlin.math.sin
 import kotlin.random.Random
 
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback, Runnable {
@@ -43,6 +49,50 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private val pSmall = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.LTGRAY
         textSize = 30f
+    }
+    private val pFloat = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(255, 220, 80)
+        textSize = 26f
+        isFakeBoldText = true
+    }
+    private val pSprite = Paint().apply { isFilterBitmap = false }
+
+    // ---- sprites ----
+    private class Sprite(val bmp: Bitmap) {
+        fun draw(canvas: Canvas, cx: Float, cy: Float, w: Float, p: Paint, rot: Float = 0f) {
+            val h = w * bmp.height.toFloat() / bmp.width
+            val rect = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+            if (rot != 0f) {
+                canvas.save()
+                canvas.rotate(rot, cx, cy)
+                canvas.drawBitmap(bmp, null, rect, p)
+                canvas.restore()
+            } else {
+                canvas.drawBitmap(bmp, null, rect, p)
+            }
+        }
+    }
+    private val sprMush = arrayOfNulls<Sprite>(5) // 1..4 damage states
+    private var sprBody: Sprite? = null
+    private var sprHead: Sprite? = null
+    private var sprSpider = arrayOfNulls<Sprite>(2)
+    private var sprFlea = arrayOfNulls<Sprite>(2)
+    private var sprShip: Sprite? = null
+
+    // ---- sound ----
+    private val snd: SoundPool = SoundPool.Builder()
+        .setMaxStreams(6)
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+        )
+        .build()
+    private val sIds = HashMap<String, Int>()
+    private fun play(name: String, vol: Float = 0.55f) {
+        val id = sIds[name] ?: return
+        snd.play(id, vol, vol, 1, 0, 1f)
     }
 
     private val COLS = 28
@@ -80,10 +130,27 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var invuln = 0f
     private var stepT = 0f
     private var deathT = 0f
+    private var shakeT = 0f
     private val stars = ArrayList<FloatArray>()
+    private val parts = ArrayList<P>()
+    private val floats = ArrayList<FT>()
+
+    class P(var x: Float, var y: Float, var vx: Float, var vy: Float, var life: Float, val col: Int)
+    class FT(var x: Float, var y: Float, val text: String, var life: Float = 0.8f)
 
     init {
         holder.addCallback(this)
+        fun spr(name: String): Sprite =
+            Sprite(BitmapFactory.decodeResource(resources, resources.getIdentifier("spr_$name", "drawable", context.packageName)))
+        for (i in 1..4) sprMush[i] = spr("mushroom_$i")
+        sprBody = spr("c_body")
+        sprHead = spr("c_head")
+        sprSpider[0] = spr("spider_0"); sprSpider[1] = spr("spider_1")
+        sprFlea[0] = spr("flea_0"); sprFlea[1] = spr("flea_1")
+        sprShip = spr("ship")
+        for (n in listOf("shoot", "mush", "mushbrk", "kill", "head", "spider", "flea", "die", "wave")) {
+            sIds[n] = snd.load(context, resources.getIdentifier(n, "raw", context.packageName), 1)
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
@@ -109,6 +176,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         bullets.clear()
         spider = null
         flea = null
+        parts.clear()
+        floats.clear()
         seedField()
         spawnChain(12, 2)
         px = fieldLeft + cell * COLS / 2
@@ -154,12 +223,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun zoneTopY() = fieldTop + cell * (ROWS - ZONE_ROWS)
     private fun zoneBottomY() = fieldTop + cell * ROWS - cell * 0.6f
 
+    private fun burst(x: Float, y: Float, col: Int, n: Int, speed: Float = 4f) {
+        repeat(n) {
+            val a = Random.nextFloat() * 6.283f
+            val v = speed * cell * (0.4f + Random.nextFloat() * 0.8f)
+            parts.add(P(x, y, kotlin.math.cos(a) * v, kotlin.math.sin(a) * v, 0.35f + Random.nextFloat() * 0.35f, col))
+        }
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                 if (state == STATE_READY || state == STATE_OVER) {
                     reset()
                     state = STATE_PLAYING
+                    play("wave", 0.5f)
                 }
                 touching = true
                 tx = e.x
@@ -207,6 +285,26 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun update(dt: Float) {
         time += dt
+        if (shakeT > 0f) shakeT -= dt
+        // particles / floating text run in every state
+        val pit = parts.iterator()
+        while (pit.hasNext()) {
+            val q = pit.next()
+            q.x += q.vx * dt
+            q.y += q.vy * dt
+            q.vx *= (1f - 2.5f * dt)
+            q.vy *= (1f - 2.5f * dt)
+            q.life -= dt
+            if (q.life <= 0f) pit.remove()
+        }
+        val fit = floats.iterator()
+        while (fit.hasNext()) {
+            val f = fit.next()
+            f.y -= cell * 1.5f * dt
+            f.life -= dt
+            if (f.life <= 0f) fit.remove()
+        }
+
         if (state == STATE_READY || state == STATE_OVER) return
         if (invuln > 0f) invuln -= dt
 
@@ -230,6 +328,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (touching && fireT >= 0.12f) {
             fireT = 0f
             bullets.add(floatArrayOf(px, py - cell * 0.7f))
+            play("shoot", 0.35f)
         }
 
         updateBullets(dt)
@@ -237,6 +336,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         updateSpider(dt)
         updateFlea(dt)
         checkPlayerHit()
+    }
+
+    private fun addScore(n: Int, x: Float, y: Float) {
+        score += n
+        floats.add(FT(x, y, "+$n"))
     }
 
     private fun updateBullets(dt: Float) {
@@ -253,7 +357,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 val m = mush[key(c, r)]
                 if (m != null) {
                     m.hp--
-                    if (m.hp <= 0) { mush.remove(key(c, r)); score += 1 }
+                    if (m.hp <= 0) {
+                        mush.remove(key(c, r))
+                        addScore(1, cellX(c), cellY(r))
+                        burst(cellX(c), cellY(r), Color.rgb(255, 120, 0), 7)
+                        play("mushbrk", 0.5f)
+                    } else {
+                        burst(cellX(c), cellY(r), Color.rgb(255, 170, 80), 3, 2f)
+                        play("mush", 0.4f)
+                    }
                     it.remove()
                     continue
                 }
@@ -266,7 +378,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 for (si in chain.indices) {
                     val s = chain[si]
                     if (abs(b[0] - cellX(s.col)) < cell * 0.45f && abs(b[1] - cellY(s.row)) < cell * 0.45f) {
-                        score += if (s.isHead) 100 else 10
+                        val pts = if (s.isHead) 100 else 10
+                        addScore(pts, cellX(s.col), cellY(s.row))
+                        burst(cellX(s.col), cellY(s.row), if (s.isHead) Color.rgb(190, 255, 80) else Color.rgb(70, 200, 70), 9)
+                        play(if (s.isHead) "head" else "kill", 0.6f)
                         if (!s.isHead && !mush.containsKey(key(s.col, s.row))) {
                             mush[key(s.col, s.row)] = Mushroom(s.col, s.row, 4)
                         }
@@ -292,6 +407,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 if (chains.isEmpty()) {
                     wave++
                     spawnWave(wave)
+                    play("wave", 0.6f)
+                    floats.add(FT(fieldLeft + cell * COLS / 2, fieldTop + cell * 8, "WAVE $wave", 1.2f))
                 }
                 continue
             }
@@ -299,7 +416,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             // spider / flea hit
             val sp2 = spider
             if (sp2 != null && abs(b[0] - sp2[0]) < cell * 0.5f && abs(b[1] - sp2[1]) < cell * 0.5f) {
-                score += 300
+                addScore(300, sp2[0], sp2[1])
+                burst(sp2[0], sp2[1], Color.rgb(255, 70, 200), 12)
+                play("spider", 0.65f)
                 spider = null
                 it.remove()
                 continue
@@ -307,8 +426,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             val fl = flea
             if (fl != null && abs(b[0] - fl[0]) < cell * 0.4f && abs(b[1] - fl[1]) < cell * 0.4f) {
                 fleaHp--
+                burst(fl[0], fl[1], Color.rgb(190, 80, 255), 4, 2f)
+                play("mush", 0.4f)
                 if (fleaHp <= 0) {
-                    score += 200
+                    addScore(200, fl[0], fl[1])
+                    burst(fl[0], fl[1], Color.rgb(190, 80, 255), 9)
+                    play("flea", 0.6f)
                     flea = null
                 }
                 it.remove()
@@ -367,7 +490,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val c = ((sp2[0] - fieldLeft) / cell).toInt()
         val r = ((sp2[1] - fieldTop) / cell).toInt()
         if (c in 0 until COLS && r in 0 until ROWS && Random.nextFloat() < dt * 3f) {
-            mush.remove(key(c, r))
+            if (mush.remove(key(c, r)) != null) burst(cellX(c), cellY(r), Color.rgb(255, 120, 0), 4, 2f)
         }
     }
 
@@ -395,6 +518,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 val c = Random.nextInt(COLS)
                 flea = floatArrayOf(cellX(c), fieldTop)
                 fleaHp = 2
+                play("flea", 0.35f)
             }
         }
     }
@@ -414,8 +538,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (hit) {
             state = STATE_DYING
             deathT = 1.1f
+            shakeT = 0.5f
             bullets.clear()
             touching = false
+            burst(px, py, Color.CYAN, 22, 6f)
+            burst(px, py, Color.WHITE, 10, 4f)
+            play("die", 0.8f)
         }
     }
 
@@ -440,10 +568,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun render(canvas: Canvas) {
         canvas.drawColor(Color.BLACK)
+        canvas.save()
+        if (shakeT > 0f) {
+            val k = shakeT * cell * 0.5f
+            canvas.translate((Random.nextFloat() - 0.5f) * k, (Random.nextFloat() - 0.5f) * k)
+        }
 
         // stars
         for (s in stars) {
-            pFill.alpha = (50 + 140 * abs(kotlin.math.sin(time * 1.5f + s[2] * 6.28f))).toInt()
+            pFill.alpha = (50 + 140 * abs(sin(time * 1.5f + s[2] * 6.28f))).toInt()
             pFill.color = Color.WHITE
             canvas.drawCircle(s[0], s[1], 1.5f, pFill)
         }
@@ -451,71 +584,70 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         // mushrooms
         for (m in mush.values) {
-            val cx = cellX(m.col)
-            val cy = cellY(m.row)
-            val r = cell * (0.16f + m.hp * 0.055f)
-            pFill.color = Color.rgb(255, 120, 0)
-            canvas.drawCircle(cx, cy - cell * 0.10f, r, pFill)
-            pFill.color = Color.rgb(230, 200, 160)
-            canvas.drawRect(cx - cell * 0.11f, cy - cell * 0.05f, cx + cell * 0.11f, cy + cell * 0.34f, pFill)
+            val s = sprMush[m.hp.coerceIn(1, 4)] ?: continue
+            s.draw(canvas, cellX(m.col), cellY(m.row), cell * 1.35f, pSprite)
         }
 
-        // centipede
+        // centipede (undulating)
         for (chain in chains) {
-            for (s in chain) {
+            for ((i, s) in chain.withIndex()) {
                 val x = cellX(s.col)
-                val y = cellY(s.row)
-                pFill.color = if (s.isHead) Color.rgb(190, 255, 80) else Color.rgb(70, 200, 70)
-                canvas.drawCircle(x, y, cell * if (s.isHead) 0.44f else 0.38f, pFill)
-                pStroke.color = Color.rgb(30, 110, 30)
-                canvas.drawCircle(x, y, cell * if (s.isHead) 0.44f else 0.38f, pStroke)
+                val y = cellY(s.row) + sin(time * 9f + i * 1.15f) * cell * 0.11f
                 if (s.isHead) {
-                    pFill.color = Color.BLACK
-                    val eo = cell * 0.16f
-                    canvas.drawCircle(x + s.dir * eo, y - eo, cell * 0.07f, pFill)
-                    canvas.drawCircle(x + s.dir * eo, y + eo, cell * 0.07f, pFill)
+                    sprHead?.draw(canvas, x, y, cell * 1.5f, pSprite, if (s.dir == 1) 90f else -90f)
+                } else {
+                    sprBody?.draw(canvas, x, y, cell * 1.4f, pSprite)
                 }
             }
         }
 
-        // spider
+        // spider (animated)
         spider?.let { sp2 ->
-            val x = sp2[0]; val y = sp2[1]
-            pStroke.color = Color.rgb(255, 60, 200)
-            val l = cell * 0.55f
-            for (i in 0 until 4) {
-                val a = (-0.6f + i * 0.4f)
-                canvas.drawLine(x - cell * 0.2f, y, x - l, y + a * cell, pStroke)
-                canvas.drawLine(x + cell * 0.2f, y, x + l, y + a * cell, pStroke)
-            }
-            pFill.color = Color.rgb(255, 60, 200)
-            canvas.drawCircle(x, y, cell * 0.34f, pFill)
+            val fr = sprSpider[((time * 9f).toInt() % 2)] ?: return@let
+            fr.draw(canvas, sp2[0], sp2[1], cell * 2.0f, pSprite)
         }
 
-        // flea
+        // flea (animated)
         flea?.let {
-            pFill.color = Color.rgb(190, 80, 255)
-            canvas.drawCircle(it[0], it[1], cell * 0.30f, pFill)
+            val fr = sprFlea[((time * 7f).toInt() % 2)] ?: return@let
+            fr.draw(canvas, it[0], it[1], cell * 1.3f, pSprite)
         }
 
-        // bullets
+        // bullets (glowing)
         pFill.color = Color.WHITE
-        for (b in bullets) canvas.drawRect(b[0] - 2.5f, b[1] - cell * 0.4f, b[0] + 2.5f, b[1] + cell * 0.4f, pFill)
+        for (b in bullets) {
+            pFill.alpha = 90
+            pFill.color = Color.rgb(120, 220, 255)
+            canvas.drawCircle(b[0], b[1], 5f, pFill)
+            pFill.alpha = 255
+            pFill.color = Color.WHITE
+            canvas.drawRect(b[0] - 2f, b[1] - cell * 0.35f, b[0] + 2f, b[1] + cell * 0.35f, pFill)
+        }
+
+        // particles
+        for (q in parts) {
+            pFill.alpha = (255 * (q.life / 0.7f).coerceIn(0f, 1f)).toInt()
+            pFill.color = q.col
+            canvas.drawCircle(q.x, q.y, cell * 0.09f, pFill)
+        }
+        pFill.alpha = 255
 
         // player
         if (state == STATE_PLAYING || state == STATE_READY) {
             val blink = invuln > 0f && ((invuln * 8f).toInt() % 2 == 0)
-            if (!blink) {
-                val path = Path()
-                path.moveTo(px, py - cell * 0.75f)
-                path.lineTo(px - cell * 0.5f, py + cell * 0.55f)
-                path.lineTo(px, py + cell * 0.25f)
-                path.lineTo(px + cell * 0.5f, py + cell * 0.55f)
-                path.close()
-                pFill.color = Color.CYAN
-                canvas.drawPath(path, pFill)
-            }
+            if (!blink) sprShip?.draw(canvas, px, py, cell * 1.4f, pSprite)
         }
+
+        // floating scores
+        for (f in floats) {
+            pFloat.alpha = (255 * (f.life / 0.8f).coerceIn(0f, 1f)).toInt()
+            pFloat.textAlign = Paint.Align.CENTER
+            canvas.drawText(f.text, f.x, f.y, pFloat)
+        }
+        pFloat.alpha = 255
+        pFloat.textAlign = Paint.Align.LEFT
+
+        canvas.restore()
 
         drawHud(canvas)
         drawOverlays(canvas)
@@ -527,17 +659,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.drawText("HI %05d".format(highScore), screenW / 2f - 110f, 46f, pText)
         pText.color = Color.rgb(255, 200, 60)
         canvas.drawText("WAVE $wave", screenW - 210f, 46f, pText)
-        // lives
         for (i in 0 until lives) {
             val x = 30f + i * 44f
             val y = screenH - 26f
-            val path = Path()
-            path.moveTo(x, y - 14f)
-            path.lineTo(x - 11f, y + 10f)
-            path.lineTo(x + 11f, y + 10f)
-            path.close()
-            pFill.color = Color.CYAN
-            canvas.drawPath(path, pFill)
+            sprShip?.draw(canvas, x, y, cell * 0.9f, pSprite)
         }
     }
 
