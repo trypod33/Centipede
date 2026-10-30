@@ -7,7 +7,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
+import android.graphics.RadialGradient
 import android.graphics.RectF
+import android.graphics.Shader
 import android.media.AudioAttributes
 import android.media.SoundPool
 import android.view.MotionEvent
@@ -58,16 +62,23 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private val pSprite = Paint().apply { isFilterBitmap = false }
 
     // ---- sprites ----
-    private class Sprite(val bmp: Bitmap) {
+    private class Sprite(val bmp: Bitmap, glow: Int) {
+        private val pGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            colorFilter = PorterDuffColorFilter(glow, PorterDuff.Mode.SRC_IN)
+            alpha = 70
+        }
         fun draw(canvas: Canvas, cx: Float, cy: Float, w: Float, p: Paint, rot: Float = 0f) {
             val h = w * bmp.height.toFloat() / bmp.width
             val rect = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+            val grect = RectF(cx - w * 0.64f, cy - h * 0.64f, cx + w * 0.64f, cy + h * 0.64f)
             if (rot != 0f) {
                 canvas.save()
                 canvas.rotate(rot, cx, cy)
+                canvas.drawBitmap(bmp, null, grect, pGlow)
                 canvas.drawBitmap(bmp, null, rect, p)
                 canvas.restore()
             } else {
+                canvas.drawBitmap(bmp, null, grect, pGlow)
                 canvas.drawBitmap(bmp, null, rect, p)
             }
         }
@@ -132,6 +143,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var deathT = 0f
     private var shakeT = 0f
     private val stars = ArrayList<FloatArray>()
+    private var pNeb1: Paint? = null
+    private var pNeb2: Paint? = null
     private val parts = ArrayList<P>()
     private val floats = ArrayList<FT>()
 
@@ -140,14 +153,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     init {
         holder.addCallback(this)
-        fun spr(name: String): Sprite =
-            Sprite(BitmapFactory.decodeResource(resources, resources.getIdentifier("spr_$name", "drawable", context.packageName)))
-        for (i in 1..4) sprMush[i] = spr("mushroom_$i")
-        sprBody = spr("c_body")
-        sprHead = spr("c_head")
-        sprSpider[0] = spr("spider_0"); sprSpider[1] = spr("spider_1")
-        sprFlea[0] = spr("flea_0"); sprFlea[1] = spr("flea_1")
-        sprShip = spr("ship")
+        fun spr(name: String, glow: Int): Sprite =
+            Sprite(BitmapFactory.decodeResource(resources, resources.getIdentifier("spr_$name", "drawable", context.packageName)), glow)
+        for (i in 1..4) sprMush[i] = spr("mushroom_$i", Color.rgb(120, 255, 120))
+        sprBody = spr("c_body", Color.rgb(110, 255, 110))
+        sprHead = spr("c_head", Color.rgb(150, 255, 90))
+        sprSpider[0] = spr("spider_0", Color.rgb(255, 80, 140)); sprSpider[1] = spr("spider_1", Color.rgb(255, 80, 140))
+        sprFlea[0] = spr("flea_0", Color.rgb(200, 120, 255)); sprFlea[1] = spr("flea_1", Color.rgb(200, 120, 255))
+        sprShip = spr("ship", Color.rgb(90, 210, 255))
         for (n in listOf("shoot", "mush", "mushbrk", "kill", "head", "spider", "flea", "die", "wave")) {
             sIds[n] = snd.load(context, resources.getIdentifier(n, "raw", context.packageName), 1)
         }
@@ -160,6 +173,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         cell = min(w / COLS.toFloat(), (h - 100f) / ROWS)
         fieldLeft = (screenW - cell * COLS) / 2f
         fieldTop = (screenH - cell * ROWS) / 2f + 40f
+        pNeb1 = Paint().apply { shader = RadialGradient(screenW * 0.28f, screenH * 0.30f, screenH * 0.55f, Color.argb(34, 90, 0, 140), Color.TRANSPARENT, Shader.TileMode.CLAMP) }
+        pNeb2 = Paint().apply { shader = RadialGradient(screenW * 0.75f, screenH * 0.62f, screenH * 0.50f, Color.argb(28, 0, 90, 150), Color.TRANSPARENT, Shader.TileMode.CLAMP) }
         stars.clear()
         repeat(70) {
             stars.add(floatArrayOf(Random.nextFloat() * screenW, Random.nextFloat() * screenH, Random.nextFloat()))
@@ -416,7 +431,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             // spider / flea hit
             val sp2 = spider
             if (sp2 != null && abs(b[0] - sp2[0]) < cell * 0.5f && abs(b[1] - sp2[1]) < cell * 0.5f) {
-                addScore(300, sp2[0], sp2[1])
+                val dRows = (zoneBottomY() - sp2[1]) / cell
+                val pts = if (dRows < 1.5f) 900 else if (dRows < 3.5f) 600 else 300
+                addScore(pts, sp2[0], sp2[1])
                 burst(sp2[0], sp2[1], Color.rgb(255, 70, 200), 12)
                 play("spider", 0.65f)
                 spider = null
@@ -573,6 +590,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             val k = shakeT * cell * 0.5f
             canvas.translate((Random.nextFloat() - 0.5f) * k, (Random.nextFloat() - 0.5f) * k)
         }
+
+        // nebula
+        pNeb1?.let { canvas.drawRect(0f, 0f, screenW, screenH, it) }
+        pNeb2?.let { canvas.drawRect(0f, 0f, screenW, screenH, it) }
 
         // stars
         for (s in stars) {
