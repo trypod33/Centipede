@@ -149,6 +149,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         snd.play(id, vol, vol, 1, 0, 1f)
     }
 
+    private fun playLoop(name: String, vol: Float): Int = sIds[name]?.let { snd.play(it, vol, vol, 1, -1, 1f) } ?: 0
+    private fun stopLoop(st: Int): Int { if (st != 0) snd.stop(st); return 0 }
+
     private val COLS = 28
     private val ROWS = 26
     private val ZONE_ROWS = 6
@@ -176,6 +179,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var fleaCheck = 0f
     private var scorp: FloatArray? = null
     private var scorpTimer = 9f
+    private var spiderStream = 0
+    private var fleaStream = 0
 
     private var px = 0f
     private var py = 0f
@@ -207,7 +212,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         sprFlea[0] = spr("flea_0", Color.rgb(200, 120, 255)); sprFlea[1] = spr("flea_1", Color.rgb(200, 120, 255))
         sprShip = spr("ship", Color.rgb(90, 210, 255))
         loadPalette(1)
-        for (n in listOf("shoot", "mush", "mushbrk", "kill", "head", "spider", "flea", "die", "wave", "poison", "scorp")) {
+        for (n in listOf("shoot", "mush", "mushbrk", "kill", "head", "spider", "flea", "die", "wave", "poison", "scorp", "sploop", "flealoop")) {
             sIds[n] = snd.load(context, resources.getIdentifier(n, "raw", context.packageName), 1)
         }
     }
@@ -239,6 +244,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         spider = null
         flea = null
         scorp = null
+        spiderStream = stopLoop(spiderStream)
+        fleaStream = stopLoop(fleaStream)
         parts.clear()
         floats.clear()
         seedField()
@@ -312,12 +319,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     fun pause() {
+        snd.autoPause()
         running = false
         thread?.interrupt()
     }
 
     fun resume() {
         if (!running && holder.surface.isValid) {
+            snd.autoResume()
             running = true
             thread = Thread(this).also { it.start() }
         }
@@ -486,6 +495,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 addScore(pts, sp2[0], sp2[1])
                 burst(sp2[0], sp2[1], Color.rgb(255, 70, 200), 12)
                 play("spider", 0.65f)
+                spiderStream = stopLoop(spiderStream)
                 spider = null
                 it.remove()
                 continue
@@ -499,6 +509,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     addScore(200, fl[0], fl[1])
                     burst(fl[0], fl[1], Color.rgb(190, 80, 255), 9)
                     play("flea", 0.6f)
+                    fleaStream = stopLoop(fleaStream)
                     flea = null
                 }
                 it.remove()
@@ -590,20 +601,26 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (sp2[1] < zoneTopY() + cell * 0.3f) { sp2[1] = zoneTopY() + cell * 0.3f; sp2[3] = abs(sp2[3]) }
         if (sp2[1] > zoneBottomY() + cell * 0.3f) { sp2[1] = zoneBottomY() + cell * 0.3f; sp2[3] = -abs(sp2[3]) }
         if (sp2[0] < fieldLeft - cell * 1.5f || sp2[0] > fieldLeft + cell * (COLS + 1.5f)) {
+            spiderStream = stopLoop(spiderStream)
             spider = null
             return
         }
-        // eat mushrooms it passes
+        // eat every mushroom it passes over
         val c = ((sp2[0] - fieldLeft) / cell).toInt()
         val r = ((sp2[1] - fieldTop) / cell).toInt()
-        if (c in 0 until COLS && r in 0 until ROWS && Random.nextFloat() < dt * 3f) {
-            if (mush.remove(key(c, r)) != null) burst(cellX(c), cellY(r), Color.rgb(255, 120, 0), 4, 2f)
+        if (c in 0 until COLS && r in 0 until ROWS) {
+            if (mush.remove(key(c, r)) != null) {
+                burst(cellX(c), cellY(r), Color.rgb(255, 120, 0), 4, 2f)
+                play("mushbrk", 0.35f)
+            }
         }
+        if (spiderStream == 0) spiderStream = playLoop("sploop", 0.3f)
     }
 
     private fun updateFlea(dt: Float) {
         val fl = flea
         if (fl != null) {
+            if (fleaStream == 0) fleaStream = playLoop("flealoop", 0.35f)
             val oldRow = ((fl[1] - fieldTop) / cell).toInt()
             fl[1] += cell * 7f * dt
             val newRow = ((fl[1] - fieldTop) / cell).toInt()
@@ -613,7 +630,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     mush[key(c, newRow)] = Mushroom(c, newRow, 4)
                 }
             }
-            if (fl[1] > zoneBottomY()) flea = null
+            if (fl[1] > zoneBottomY()) { fleaStream = stopLoop(fleaStream); flea = null }
             return
         }
         fleaCheck += dt
