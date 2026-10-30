@@ -67,10 +67,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             colorFilter = PorterDuffColorFilter(glow, PorterDuff.Mode.SRC_IN)
             alpha = 70
         }
-        fun draw(canvas: Canvas, cx: Float, cy: Float, w: Float, p: Paint, rot: Float = 0f) {
+        fun draw(canvas: Canvas, cx: Float, cy: Float, w: Float, p: Paint, rot: Float = 0f, flipH: Boolean = false) {
             val h = w * bmp.height.toFloat() / bmp.width
             val rect = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
             val grect = RectF(cx - w * 0.64f, cy - h * 0.64f, cx + w * 0.64f, cy + h * 0.64f)
+            if (flipH) {
+                canvas.save()
+                canvas.scale(-1f, 1f, cx, cy)
+                canvas.drawBitmap(bmp, null, grect, pGlow)
+                canvas.drawBitmap(bmp, null, rect, p)
+                canvas.restore()
+                return
+            }
             if (rot != 0f) {
                 canvas.save()
                 canvas.rotate(rot, cx, cy)
@@ -89,6 +97,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var sprSpider = arrayOfNulls<Sprite>(2)
     private var sprFlea = arrayOfNulls<Sprite>(2)
     private var sprShip: Sprite? = null
+    private var sprMushP = arrayOfNulls<Sprite>(5)
+    private var sprScorp = arrayOfNulls<Sprite>(2)
 
     // ---- sound ----
     private val snd: SoundPool = SoundPool.Builder()
@@ -120,8 +130,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var lives = 3
     private var wave = 1
 
-    class Mushroom(val col: Int, val row: Int, var hp: Int)
-    class Seg(var col: Int, var row: Int, var dir: Int, var isHead: Boolean)
+    class Mushroom(val col: Int, val row: Int, var hp: Int, var poisoned: Boolean = false)
+    class Seg(var col: Int, var row: Int, var dir: Int, var isHead: Boolean, var poisoned: Boolean = false)
 
     private val mush = HashMap<Long, Mushroom>()
     private val chains = ArrayList<MutableList<Seg>>()
@@ -131,6 +141,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var flea: FloatArray? = null
     private var fleaHp = 2
     private var fleaCheck = 0f
+    private var scorp: FloatArray? = null
+    private var scorpTimer = 9f
 
     private var px = 0f
     private var py = 0f
@@ -161,7 +173,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         sprSpider[0] = spr("spider_0", Color.rgb(255, 80, 140)); sprSpider[1] = spr("spider_1", Color.rgb(255, 80, 140))
         sprFlea[0] = spr("flea_0", Color.rgb(200, 120, 255)); sprFlea[1] = spr("flea_1", Color.rgb(200, 120, 255))
         sprShip = spr("ship", Color.rgb(90, 210, 255))
-        for (n in listOf("shoot", "mush", "mushbrk", "kill", "head", "spider", "flea", "die", "wave")) {
+        for (i in 1..4) sprMushP[i] = spr("mushp_$i", Color.rgb(210, 120, 255))
+        sprScorp[0] = spr("scorp_0", Color.rgb(255, 220, 60)); sprScorp[1] = spr("scorp_1", Color.rgb(255, 220, 60))
+        for (n in listOf("shoot", "mush", "mushbrk", "kill", "head", "spider", "flea", "die", "wave", "poison", "scorp")) {
             sIds[n] = snd.load(context, resources.getIdentifier(n, "raw", context.packageName), 1)
         }
     }
@@ -191,6 +205,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         bullets.clear()
         spider = null
         flea = null
+        scorp = null
         parts.clear()
         floats.clear()
         seedField()
@@ -350,6 +365,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         stepCentipede(dt)
         updateSpider(dt)
         updateFlea(dt)
+        updateScorp(dt)
         checkPlayerHit()
     }
 
@@ -453,6 +469,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 }
                 it.remove()
             }
+            val sc = scorp
+            if (sc != null && abs(b[0] - sc[0]) < cell * 0.6f && abs(b[1] - sc[1]) < cell * 0.55f) {
+                addScore(1000, sc[0], sc[1])
+                burst(sc[0], sc[1], Color.rgb(255, 220, 60), 14)
+                play("scorp", 0.65f)
+                scorp = null
+                scorpTimer = 8f + Random.nextFloat() * 6f
+                it.remove()
+            }
         }
     }
 
@@ -463,12 +488,28 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         stepT -= interval
         for (chain in chains) {
             for (s in chain) {
+                if (s.poisoned) {
+                    // poisoned: dives straight down, chewing through anything
+                    val nr = s.row + 1
+                    mush.remove(key(s.col, nr))
+                    s.row = nr
+                    if (nr >= ROWS - 2) s.poisoned = false
+                    continue
+                }
                 var nc = s.col + s.dir
                 var nr = s.row
-                if (nc < 0 || nc >= COLS || mush.containsKey(key(nc, nr))) {
-                    s.dir = -s.dir
-                    nc = s.col
-                    nr += 1
+                val target = mush[key(nc, nr)]
+                if (nc < 0 || nc >= COLS || target != null) {
+                    if (target != null && target.poisoned) {
+                        // eats the poisoned mushroom and goes crazy
+                        mush.remove(key(nc, nr))
+                        s.poisoned = true
+                        play("poison", 0.5f)
+                    } else {
+                        s.dir = -s.dir
+                        nc = s.col
+                        nr += 1
+                    }
                 }
                 if (nr >= ROWS - 1) {
                     nr = 0
@@ -540,6 +581,39 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
+    private fun updateScorp(dt: Float) {
+        scorpTimer -= dt
+        val sc = scorp
+        if (sc == null) {
+            if (scorpTimer <= 0f && wave >= 3) {
+                scorpTimer = 8f + Random.nextFloat() * 6f
+                val fromLeft = Random.nextBoolean()
+                val x = if (fromLeft) fieldLeft - cell else fieldLeft + cell * COLS
+                val y = cellY(Random.nextInt(4, ROWS - ZONE_ROWS - 1))
+                val dx = (if (fromLeft) 1 else -1) * cell * 5f
+                scorp = floatArrayOf(x, y, dx)
+                play("poison", 0.35f)
+            }
+            return
+        }
+        sc[0] += sc[2] * dt
+        if (sc[0] < fieldLeft - cell * 1.5f || sc[0] > fieldLeft + cell * (COLS + 1.5f)) {
+            scorp = null
+            scorpTimer = 8f + Random.nextFloat() * 6f
+            return
+        }
+        val c = ((sc[0] - fieldLeft) / cell).toInt()
+        val r = ((sc[1] - fieldTop) / cell).toInt()
+        if (c in 0 until COLS && r in 0 until ROWS) {
+            val m = mush[key(c, r)]
+            if (m != null && !m.poisoned) {
+                m.poisoned = true
+                play("poison", 0.45f)
+                burst(cellX(c), cellY(r), Color.rgb(200, 120, 255), 5, 2f)
+            }
+        }
+    }
+
     private fun checkPlayerHit() {
         if (invuln > 0f) return
         var hit = false
@@ -552,6 +626,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (!hit && sp2 != null && abs(px - sp2[0]) < cell * 0.6f && abs(py - sp2[1]) < cell * 0.6f) hit = true
         val fl = flea
         if (!hit && fl != null && abs(px - fl[0]) < cell * 0.5f && abs(py - fl[1]) < cell * 0.5f) hit = true
+        val sc = scorp
+        if (!hit && sc != null && abs(px - sc[0]) < cell * 0.6f && abs(py - sc[1]) < cell * 0.55f) hit = true
         if (hit) {
             state = STATE_DYING
             deathT = 1.1f
@@ -605,7 +681,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         // mushrooms
         for (m in mush.values) {
-            val s = sprMush[m.hp.coerceIn(1, 4)] ?: continue
+            val s = (if (m.poisoned) sprMushP else sprMush)[m.hp.coerceIn(1, 4)] ?: continue
             s.draw(canvas, cellX(m.col), cellY(m.row), cell * 1.35f, pSprite)
         }
 
@@ -615,9 +691,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 val x = cellX(s.col)
                 val y = cellY(s.row) + sin(time * 9f + i * 1.15f) * cell * 0.11f
                 if (s.isHead) {
-                    sprHead?.draw(canvas, x, y, cell * 1.5f, pSprite, if (s.dir == 1) 90f else -90f)
+                    sprHead?.draw(canvas, x, y, cell * 1.22f, pSprite, if (s.dir == 1) 90f else -90f)
                 } else {
-                    sprBody?.draw(canvas, x, y, cell * 1.4f, pSprite)
+                    sprBody?.draw(canvas, x, y, cell * 1.15f, pSprite)
                 }
             }
         }
@@ -632,6 +708,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         flea?.let {
             val fr = sprFlea[((time * 7f).toInt() % 2)] ?: return@let
             fr.draw(canvas, it[0], it[1], cell * 1.3f, pSprite)
+        }
+
+        // scorpion (animated, faces travel direction)
+        scorp?.let {
+            val fr = sprScorp[((time * 6f).toInt() % 2)] ?: return@let
+            fr.draw(canvas, it[0], it[1], cell * 1.9f, pSprite, flipH = it[2] < 0)
         }
 
         // bullets (glowing)
