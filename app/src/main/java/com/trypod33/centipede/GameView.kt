@@ -420,7 +420,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         chain.removeAt(idx)
                         if (idx == 0) {
                             if (chain.isNotEmpty()) chain[0].isHead = true
-                        } else if (chain.isNotEmpty()) {
+                        } else if (idx < chain.size) {
                             val rear = chain.subList(idx, chain.size).toMutableList()
                             chain.subList(idx, chain.size).clear()
                             rear[0].isHead = true
@@ -468,6 +468,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     flea = null
                 }
                 it.remove()
+                continue
             }
             val sc = scorp
             if (sc != null && abs(b[0] - sc[0]) < cell * 0.6f && abs(b[1] - sc[1]) < cell * 0.55f) {
@@ -477,6 +478,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 scorp = null
                 scorpTimer = 8f + Random.nextFloat() * 6f
                 it.remove()
+                continue
             }
         }
     }
