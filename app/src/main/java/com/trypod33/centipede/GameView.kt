@@ -224,8 +224,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         cell = min(w / COLS.toFloat(), (h - 100f) / ROWS)
         fieldLeft = (screenW - cell * COLS) / 2f
         fieldTop = (screenH - cell * ROWS) / 2f + 40f
-        pNeb1 = Paint().apply { shader = RadialGradient(screenW * 0.28f, screenH * 0.30f, screenH * 0.55f, Color.argb(34, 90, 0, 140), Color.TRANSPARENT, Shader.TileMode.CLAMP) }
-        pNeb2 = Paint().apply { shader = RadialGradient(screenW * 0.75f, screenH * 0.62f, screenH * 0.50f, Color.argb(28, 0, 90, 150), Color.TRANSPARENT, Shader.TileMode.CLAMP) }
+        pNeb1 = Paint().apply { shader = RadialGradient(screenW * 0.28f, screenH * 0.30f, screenH * 0.55f, Color.argb(44, 96, 10, 160), Color.TRANSPARENT, Shader.TileMode.CLAMP) }
+        pNeb2 = Paint().apply { shader = RadialGradient(screenW * 0.75f, screenH * 0.62f, screenH * 0.50f, Color.argb(34, 20, 130, 40), Color.TRANSPARENT, Shader.TileMode.CLAMP) }
         stars.clear()
         repeat(70) {
             stars.add(floatArrayOf(Random.nextFloat() * screenW, Random.nextFloat() * screenH, Random.nextFloat()))
